@@ -59,9 +59,15 @@ app.post('/webhook/odoo-to-vnpay', async(req, res) => {
     try {
 
         console.log("=== CÓ REQUEST TỪ ODOO GỬI SANG ===", req.body);
+        const id = req.body.id || req.body._id;
+        const amount_total = req.body.amount_residual; // Dùng số tiền khách còn nợ
+        const name = req.body.display_name || `HoaDon_${id}`;
 
-        const { id, amount_total, name } = req.body;
+        // Kiểm tra dữ liệu
         if (!id) return res.status(400).send("Missing ID");
+        if (!amount_total || amount_total <= 0) {
+            return res.status(400).send("Khong tim thay so tien, hoac hoa don da duoc thanh toan het!");
+        }
 
         let date = new Date();
         let createDate = moment(date).format('YYYYMMDDHHmmss');
