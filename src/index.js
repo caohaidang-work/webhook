@@ -57,6 +57,9 @@ function callOdoo(model, method, args) {
 // 1. API: NHẬN WEBHOOK TỪ ODOO -> TẠO LINK VNPAY
 app.post('/webhook/odoo-to-vnpay', async(req, res) => {
     try {
+
+        console.log("=== CÓ REQUEST TỪ ODOO GỬI SANG ===", req.body);
+
         const { id, amount_total, name } = req.body;
         if (!id) return res.status(400).send("Missing ID");
 
