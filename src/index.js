@@ -22,7 +22,7 @@ const {
     VNP_RETURN_URL
 } = process.env;
 
-// --- HÀM HỖ TRỢ: Sắp xếp tham số VNPay ---
+// --- HÀM HỖ TRỢ: Sắp xếp tham số VNPay (CỰC KỲ QUAN TRỌNG) ---
 function sortObject(obj) {
     let sorted = {};
     let str = [];
@@ -41,12 +41,15 @@ function sortObject(obj) {
 
 // --- HÀM HỖ TRỢ: Gọi Odoo qua XML-RPC ---
 function callOdoo(model, method, args) {
-    const common = xmlrpc.createSecureClient(`${ODOO_URL}/xmlrpc/2/common`);
+    const isHttps = ODOO_URL.startsWith('https');
+    const clientCreator = isHttps ? xmlrpc.createSecureClient : xmlrpc.createClient;
+    const client = clientCreator(`${ODOO_URL}/xmlrpc/2/object`);
+    const common = clientCreator(`${ODOO_URL}/xmlrpc/2/common`);
+
     return new Promise((resolve, reject) => {
         common.methodCall('authenticate', [ODOO_DB, ODOO_USER, ODOO_PASSWORD, {}], (err, uid) => {
-            if (err || !uid) return reject(err || "Auth failed");
-            const models = xmlrpc.createSecureClient(`${ODOO_URL}/xmlrpc/2/object`);
-            models.methodCall('execute_kw', [ODOO_DB, uid, ODOO_PASSWORD, model, method, args], (err, res) => {
+            if (err || !uid) return reject(err || "Auth failed - Check Odoo Credentials");
+            client.methodCall('execute_kw', [ODOO_DB, uid, ODOO_PASSWORD, model, method, args], (err, res) => {
                 if (err) return reject(err);
                 resolve(res);
             });
@@ -54,24 +57,24 @@ function callOdoo(model, method, args) {
     });
 }
 
+// =====================================================================
 // 1. API: NHẬN WEBHOOK TỪ ODOO -> TẠO LINK VNPAY
+// =====================================================================
 app.post('/webhook/odoo-to-vnpay', async(req, res) => {
     try {
+        console.log("=== NHẬN REQUEST TỪ ODOO ===", req.body);
 
-        console.log("=== CÓ REQUEST TỪ ODOO GỬI SANG ===", req.body);
         const id = req.body.id || req.body._id;
-        const amount_total = req.body.amount_residual; // Dùng số tiền khách còn nợ
-        const name = req.body.display_name || `HoaDon_${id}`;
+        const amount_total = req.body.amount_residual || req.body.amount_total;
+        const name = req.body.display_name || req.body.name || `Hóa đơn ${id}`;
 
-        // Kiểm tra dữ liệu
-        if (!id) return res.status(400).send("Missing ID");
-        if (!amount_total || amount_total <= 0) {
-            return res.status(400).send("Khong tim thay so tien, hoac hoa don da duoc thanh toan het!");
+        if (!id || !amount_total) {
+            return res.status(400).json({ error: "Thiếu ID hoặc Số tiền thanh toán" });
         }
 
         let date = new Date();
         let createDate = moment(date).format('YYYYMMDDHHmmss');
-        let amount = Math.round(amount_total * 100); // VNPay yêu cầu x100
+        let amount = Math.round(amount_total * 100);
 
         let vnp_Params = {
             'vnp_Version': '2.1.0',
@@ -79,12 +82,12 @@ app.post('/webhook/odoo-to-vnpay', async(req, res) => {
             'vnp_TmnCode': VNP_TMN_CODE,
             'vnp_Locale': 'vn',
             'vnp_CurrCode': 'VND',
-            'vnp_TxnRef': `${id}_${createDate}`, // ID hóa đơn + timestamp
+            'vnp_TxnRef': `${id}_${createDate}`,
             'vnp_OrderInfo': `Thanh toan hoa don ${name}`,
             'vnp_OrderType': 'billpayment',
             'vnp_Amount': amount,
             'vnp_ReturnUrl': VNP_RETURN_URL,
-            'vnp_IpAddr': req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+            'vnp_IpAddr': req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1',
             'vnp_CreateDate': createDate
         };
 
@@ -96,56 +99,65 @@ app.post('/webhook/odoo-to-vnpay', async(req, res) => {
 
         const paymentUrl = VNP_URL + '?' + qs.stringify(vnp_Params, { encode: false });
 
-        // Ghi ngược link vào Odoo (trường x_vnpay_url)
-        // Ghi link vào phần Thảo luận (Chatter) thay vì tạo trường mới
+        // Ghi link vào Chatter Odoo
         await callOdoo('mail.message', 'create', [{
             'model': 'account.move',
-            'res_id': id,
+            'res_id': parseInt(id),
             'body': `Link thanh toán VNPay đã được tạo: <a href="${paymentUrl}" target="_blank">Bấm vào đây để thanh toán</a>`,
             'message_type': 'comment',
-            'subtype_id': 1 // ID của kiểu thảo luận công khai
+            'subtype_id': 1
         }]);
 
         res.json({ status: 'success', url: paymentUrl });
     } catch (error) {
-        console.error(error);
+        console.error("LỖI TẠO LINK:", error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// 2. API: NHẬN IPN TỪ VNPAY (XÁC NHẬN THANH TOÁN)
+// =====================================================================
+// 2. API: NHẬN IPN TỪ VNPAY (RETURN & IPN)
+// =====================================================================
 app.get('/webhook/vnpay-ipn', async(req, res) => {
-    let vnp_Params = req.query;
-    let secureHash = vnp_Params['vnp_SecureHash'];
+    try {
+        let vnp_Params = req.query;
+        let secureHash = vnp_Params['vnp_SecureHash'];
 
-    delete vnp_Params['vnp_SecureHash'];
-    delete vnp_Params['vnp_SecureHashType'];
+        delete vnp_Params['vnp_SecureHash'];
+        delete vnp_Params['vnp_SecureHashType'];
 
-    vnp_Params = sortObject(vnp_Params);
-    let signData = qs.stringify(vnp_Params, { encode: false });
-    let hmac = crypto.createHmac("sha512", VNP_HASH_SECRET);
-    let signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
+        vnp_Params = sortObject(vnp_Params);
 
-    if (secureHash === signed) {
-        let orderId = vnp_Params['vnp_TxnRef'].split('_')[0];
-        let responseCode = vnp_Params['vnp_ResponseCode'];
+        let signData = qs.stringify(vnp_Params, { encode: false });
+        let hmac = crypto.createHmac("sha512", VNP_HASH_SECRET);
+        let signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
 
-        if (responseCode === '00') {
-            // Thanh toán thành công -> Ghi log vào Odoo Chatter
-            await callOdoo('mail.message', 'create', [{
-                'model': 'account.move',
-                'res_id': parseInt(orderId),
-                'body': `Thanh toán VNPay thành công. Mã GD: ${vnp_Params['vnp_TransactionNo']}`,
-                'message_type': 'notification'
-            }]);
-            res.status(200).json({ RspCode: '00', Message: 'Success' });
+        if (secureHash === signed) {
+            let responseCode = vnp_Params['vnp_ResponseCode'];
+            let txnRef = vnp_Params['vnp_TxnRef'];
+            let orderId = txnRef.split('_')[0];
+
+            if (responseCode === '00') {
+                // Ghi nhận thành công vào Odoo
+                await callOdoo('mail.message', 'create', [{
+                    'model': 'account.move',
+                    'res_id': parseInt(orderId),
+                    'body': `✅ <b>Thanh toán thành công qua VNPay</b>. <br/>Mã GD: ${vnp_Params['vnp_TransactionNo']}<br/>Số tiền: ${vnp_Params['vnp_Amount']/100} VND`,
+                    'message_type': 'notification'
+                }]);
+                return res.status(200).json({ RspCode: '00', Message: 'Confirm Success' });
+            } else {
+                return res.status(200).json({ RspCode: '01', Message: 'Payment Failed' });
+            }
         } else {
-            res.status(200).json({ RspCode: '01', Message: 'Fail' });
+            console.error("SAI CHỮ KÝ! Checksum không khớp.");
+            return res.status(200).json({ RspCode: '97', Message: 'Invalid Checksum' });
         }
-    } else {
-        res.status(200).json({ RspCode: '97', Message: 'Invalid Checksum' });
+    } catch (error) {
+        console.error("LỖI IPN:", error);
+        res.status(500).json({ RspCode: '99', Message: 'Internal Error' });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server đang chạy tại port ${PORT}`));
