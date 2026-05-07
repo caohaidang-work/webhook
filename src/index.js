@@ -88,9 +88,14 @@ app.post('/webhook/odoo-to-vnpay', async(req, res) => {
         const paymentUrl = VNP_URL + '?' + qs.stringify(vnp_Params, { encode: false });
 
         // Ghi ngược link vào Odoo (trường x_vnpay_url)
-        await callOdoo('account.move', 'write', [
-            [id], { 'x_vnpay_url': paymentUrl }
-        ]);
+        // Ghi link vào phần Thảo luận (Chatter) thay vì tạo trường mới
+        await callOdoo('mail.message', 'create', [{
+            'model': 'account.move',
+            'res_id': id,
+            'body': `Link thanh toán VNPay đã được tạo: <a href="${paymentUrl}" target="_blank">Bấm vào đây để thanh toán</a>`,
+            'message_type': 'comment',
+            'subtype_id': 1 // ID của kiểu thảo luận công khai
+        }]);
 
         res.json({ status: 'success', url: paymentUrl });
     } catch (error) {
