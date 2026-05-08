@@ -171,6 +171,72 @@ app.get('/webhook/vnpay-ipn', async(req, res) => {
         return res.status(500).json({ RspCode: '99', Message: 'Internal Error' });
     }
 });
+// =====================================================================
+// 3. API: HIỂN THỊ GIAO DIỆN TRÌNH DUYỆT (RETURN URL)
+// =====================================================================
+app.get('/webhook/vnpay-return', (req, res) => {
+            let vnp_Params = req.query;
+            let secureHash = vnp_Params['vnp_SecureHash'];
+
+            delete vnp_Params['vnp_SecureHash'];
+            delete vnp_Params['vnp_SecureHashType'];
+
+            // Dùng lại hàm sortObject có sẵn ở trên
+            vnp_Params = sortObject(vnp_Params);
+            let signData = Object.keys(vnp_Params).map(key => `${key}=${vnp_Params[key]}`).join('&');
+
+            const secretKey = process.env.VNP_HASH_SECRET.trim();
+            let hmac = crypto.createHmac("sha512", secretKey);
+            let signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
+
+            // Giao diện HTML
+            const renderHTML = (isSuccess, title, message, color, icon) => `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Kết quả thanh toán</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
+            .icon { font-size: 60px; color: ${color}; margin-bottom: 20px; }
+            .title { color: #1f2937; font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+            .message { color: #6b7280; font-size: 16px; margin-bottom: 30px; line-height: 1.5; }
+            .details { background: #f9fafb; padding: 15px; border-radius: 8px; text-align: left; margin-bottom: 30px; font-size: 14px; color: #4b5563;}
+            .details div { padding: 5px 0; border-bottom: 1px dashed #e5e7eb; }
+            .details div:last-child { border-bottom: none; }
+            .btn { background-color: ${color}; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; transition: opacity 0.2s; display: inline-block;}
+            .btn:hover { opacity: 0.9; }
+        </button>
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="icon">${icon}</div>
+            <div class="title">${title}</div>
+            <div class="message">${message}</div>
+            ${isSuccess ? `
+            <div class="details">
+                <div><strong>Mã giao dịch:</strong> ${vnp_Params['vnp_TransactionNo']}</div>
+                <div><strong>Số tiền:</strong> ${(vnp_Params['vnp_Amount']/100).toLocaleString('vi-VN')} VND</div>
+                <div><strong>Ngân hàng:</strong> ${vnp_Params['vnp_BankCode']}</div>
+            </div>` : ''}
+            <a href="#" onclick="window.close()" class="btn">Đóng cửa sổ này</a>
+        </div>
+    </body>
+    </html>`;
+
+    if (secureHash === signed) {
+        if (vnp_Params['vnp_ResponseCode'] === '00') {
+            res.send(renderHTML(true, "Thanh toán thành công!", "Cảm ơn bạn đã thanh toán. Hóa đơn trên hệ thống đã được cập nhật.", "#10b981", "✓"));
+        } else {
+            res.send(renderHTML(false, "Thanh toán thất bại!", "Giao dịch không thành công hoặc đã bị hủy.", "#ef4444", "✗"));
+        }
+    } else {
+        res.send(renderHTML(false, "Lỗi xác thực!", "Dữ liệu không hợp lệ. Vui lòng liên hệ bộ phận hỗ trợ.", "#f59e0b", "⚠"));
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server Railway chạy tại port ${PORT}`));
