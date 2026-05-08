@@ -115,39 +115,60 @@ app.post('/webhook/odoo-to-vnpay', async(req, res) => {
 // =====================================================================
 // 2. API: VNPAY GỌI VỀ ĐỂ XÁC NHẬN (IPN & RETURN)
 // =====================================================================
+// Thay thư viện 'qs' bằng 'querystring' mặc định của Node để giống 100% VNPay
+const querystring = require('querystring');
+
 app.get('/webhook/vnpay-ipn', async(req, res) => {
-    let vnp_Params = req.query;
-    let secureHash = vnp_Params['vnp_SecureHash'];
+    try {
+        let vnp_Params = req.query;
+        let secureHash = vnp_Params['vnp_SecureHash'];
 
-    delete vnp_Params['vnp_SecureHash'];
-    delete vnp_Params['vnp_SecureHashType'];
+        delete vnp_Params['vnp_SecureHash'];
+        delete vnp_Params['vnp_SecureHashType'];
 
-    vnp_Params = sortObject(vnp_Params);
+        vnp_Params = sortObject(vnp_Params);
 
-    let signData = qs.stringify(vnp_Params, { encode: false });
-    let hmac = crypto.createHmac("sha512", VNP_HASH_SECRET);
-    let signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
+        // Dùng querystring thay vì qs
+        let signData = querystring.stringify(vnp_Params, { encode: false });
 
-    if (secureHash === signed) {
-        let responseCode = vnp_Params['vnp_ResponseCode'];
-        let txnRef = vnp_Params['vnp_TxnRef'];
-        let orderId = txnRef.split('_')[0]; // Lấy lại ID Odoo từ Ref
+        // DÙNG .trim() ĐỂ CHÉM BAY MỌI KÝ TỰ ENTER/KHOẢNG TRẮNG ẨN TRONG SECRET KEY
+        const secretKey = process.env.VNP_HASH_SECRET.trim();
 
-        if (responseCode === '00') {
-            // Thanh toán thành công -> Báo về Odoo
-            await callOdoo('mail.message', 'create', [{
-                'model': 'account.move',
-                'res_id': parseInt(orderId),
-                'body': `✅ <b>Thanh toán thành công qua VNPay.</b><br/>Mã giao dịch: ${vnp_Params['vnp_TransactionNo']}`,
-                'message_type': 'notification'
-            }]);
-            return res.status(200).json({ RspCode: '00', Message: 'Success' });
+        let hmac = crypto.createHmac("sha512", secretKey);
+        let signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
+
+        // ==========================================
+        // KHU VỰC ĐÈN PHA SO CHIẾU LỖI (HIỆN TRONG LOG)
+        // ==========================================
+        console.log("\n====== BẮT ĐẦU DEBUG CHECKSUM ======");
+        console.log("1. Chiều dài Secret Key hiện tại:", secretKey.length, "(Chuẩn của VNPay phải là 32 ký tự)");
+        console.log("2. Chuỗi dữ liệu mang đi băm (signData): \n" + signData);
+        console.log("3. Hash của VNPay mang tới :", secureHash);
+        console.log("4. Hash do Server tính ra  :", signed);
+        console.log("======================================\n");
+
+        if (secureHash === signed) {
+            let responseCode = vnp_Params['vnp_ResponseCode'];
+            let txnRef = vnp_Params['vnp_TxnRef'];
+            let orderId = txnRef.split('_')[0];
+
+            if (responseCode === '00') {
+                await callOdoo('mail.message', 'create', [{
+                    'model': 'account.move',
+                    'res_id': parseInt(orderId),
+                    'body': `✅ <b>Thanh toán thành công qua VNPay.</b><br/>Mã giao dịch: ${vnp_Params['vnp_TransactionNo']}`,
+                    'message_type': 'notification'
+                }]);
+                return res.status(200).json({ RspCode: '00', Message: 'Success' });
+            } else {
+                return res.status(200).json({ RspCode: '01', Message: 'Fail' });
+            }
         } else {
-            return res.status(200).json({ RspCode: '01', Message: 'Fail' });
+            return res.status(200).json({ RspCode: '97', Message: 'Invalid Checksum' });
         }
-    } else {
-        console.log("=== SAI CHỮ KÝ (IPN) ===");
-        return res.status(200).json({ RspCode: '97', Message: 'Checksum failed' });
+    } catch (error) {
+        console.error("LỖI IPN:", error);
+        return res.status(500).json({ RspCode: '99', Message: 'Internal Error' });
     }
 });
 
