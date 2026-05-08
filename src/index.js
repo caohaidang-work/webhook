@@ -129,7 +129,7 @@ app.get('/webhook/vnpay-ipn', async(req, res) => {
         vnp_Params = sortObject(vnp_Params);
 
         // Dùng querystring thay vì qs
-        let signData = querystring.stringify(vnp_Params, { encode: false });
+        let signData = Object.keys(vnp_Params).map(key => `${key}=${vnp_Params[key]}`).join('&');
 
         // DÙNG .trim() ĐỂ CHÉM BAY MỌI KÝ TỰ ENTER/KHOẢNG TRẮNG ẨN TRONG SECRET KEY
         const secretKey = process.env.VNP_HASH_SECRET.trim();
