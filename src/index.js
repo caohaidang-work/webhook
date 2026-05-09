@@ -34,14 +34,7 @@ function sortObject(obj) {
     }
     str.sort();
     for (key = 0; key < str.length; key++) {
-        // Ép NodeJS mã hóa các ký tự mà nó hay bỏ quên để khớp với VNPay
-        sorted[str[key]] = encodeURIComponent(obj[str[key]])
-            .replace(/%20/g, "+")
-            .replace(/!/g, "%21")
-            .replace(/'/g, "%27")
-            .replace(/\(/g, "%28") // Giải quyết dấu (
-            .replace(/\)/g, "%29") // Giải quyết dấu )
-            .replace(/\*/g, "%2A");
+        sorted[str[key]] = encodeURIComponent(obj[str[key]]).replace(/%20/g, "+");
     }
     return sorted;
 }
