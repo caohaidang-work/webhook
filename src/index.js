@@ -128,15 +128,12 @@ app.get('/webhook/vnpay-ipn', async(req, res) => {
 
         vnp_Params = sortObject(vnp_Params);
 
-        // Dùng querystring thay vì qs
-        let signData = Object.keys(vnp_Params).map(key => `${key}=${vnp_Params[key]}`).join('&');
+        // Dùng thư viện qs với encode: false để tránh bị lỗi [object Object]
+        let signData = qs.stringify(vnp_Params, { encode: false });
 
-        // DÙNG .trim() ĐỂ CHÉM BAY MỌI KÝ TỰ ENTER/KHOẢNG TRẮNG ẨN TRONG SECRET KEY
         const secretKey = process.env.VNP_HASH_SECRET.trim();
-
         let hmac = crypto.createHmac("sha512", secretKey);
         let signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
-
         // ==========================================
         // KHU VỰC ĐÈN PHA SO CHIẾU LỖI (HIỆN TRONG LOG)
         // ==========================================
@@ -186,7 +183,9 @@ app.get('/webhook/vnpay-return', (req, res) => {
                 delete vnp_Params['vnp_SecureHashType'];
 
                 vnp_Params = sortObject(vnp_Params);
-                let signData = Object.keys(vnp_Params).map(key => `${key}=${vnp_Params[key]}`).join('&');
+
+                // Dùng thư viện qs với encode: false để tránh bị lỗi [object Object]
+                let signData = qs.stringify(vnp_Params, { encode: false });
 
                 const secretKey = process.env.VNP_HASH_SECRET.trim();
                 let hmac = crypto.createHmac("sha512", secretKey);
